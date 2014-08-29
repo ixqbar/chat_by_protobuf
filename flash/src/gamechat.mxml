@@ -1,0 +1,443 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:Application xmlns:fx="http://ns.adobe.com/mxml/2009"
+			   xmlns:s="library://ns.adobe.com/flex/spark"
+			   xmlns:mx="library://ns.adobe.com/flex/mx"
+			   width="450" height="205" creationComplete="init()">	
+	<s:layout>
+		<s:BasicLayout/>
+	</s:layout>
+	
+	<fx:Script>
+		<![CDATA[
+			//引入包
+			import flash.errors.*;
+			import flash.events.*;
+			import flash.external.ExternalInterface;
+			import flash.net.Socket;
+			import flash.system.Security;
+			import flash.utils.setTimeout;
+			
+			import mx.core.UIComponent;
+			import mx.events.FlexEvent;
+			import mx.events.IndexChangedEvent;
+			
+			import spark.effects.easing.EaseInOutBase;
+	
+			//用户信息
+			private var player:Object = new Object;
+			//默认频道1-3
+			private var currentChannel:int = 1;
+			//socket句柄
+			private var socketHandle :Socket;
+			//心跳信息字符串
+			private var playerPulseInfo:ByteArray = new ByteArray();
+			//连接标志
+			private var connected    :int = 0;
+			//心跳间隔
+			private var pulseInterval:int = 10;
+			private var error        :int = 0;      //错误代码
+			
+			private var sendChatMessage:ChatMessage;
+			
+			[Embed(source="broad.png")]
+			private const noticeIcon:Class;
+			[Embed(source="empty.png")]
+			private const publicIcon:Class;
+			[Embed(source="empty.png")]
+			private const personalIcon:Class;
+			[Embed(source="empty.png")]
+			private const groupIcon:Class;
+			
+			/**
+			 * 初始化
+			 */ 
+			public function init():void {
+                Security.allowDomain("*");
+				//接口
+				ExternalInterface.addCallback("initMemberInfo", initMemberInfo);
+				ExternalInterface.addCallback("connectServer", connectServer);
+				
+				//socket
+				this.socketHandle = new Socket();
+				this.socketHandle.addEventListener(Event.CLOSE, socketCloseHandle);
+				this.socketHandle.addEventListener(Event.CONNECT, socketConnetHandle);
+				this.socketHandle.addEventListener(IOErrorEvent.IO_ERROR, socketIoErrorHandle);
+				this.socketHandle.addEventListener(SecurityErrorEvent.SECURITY_ERROR, socketSecurityErrorHandle);
+				this.socketHandle.addEventListener(ProgressEvent.SOCKET_DATA, socketDataHandle);
+				
+				//频道导航
+				ChatTab.addEventListener(IndexChangedEvent.CHANGE,channelChange); 
+				BtnMessage.addEventListener(MouseEvent.CLICK,sendMessage);
+				TxtMessage.addEventListener(FlexEvent.ENTER,sendMessage);
+				
+				this.sendChatMessage = new ChatMessage();
+			}
+			
+			/**
+			 * 
+			 */ 
+			private function flashLog(type:String,log:String):void {
+				ExternalInterface.call("GameChat.flashLog", type, log);
+			}
+			
+			private function initMemberInfo(memberInfo:Object):int {
+				var result:int = 0;
+				if (memberInfo) {
+					//用户信息
+					this.player.fromId = memberInfo.fromId.toString();
+					this.player.name = memberInfo.name ? memberInfo.name.toString() : "";					
+					this.player.groupId = int(memberInfo.groupId);
+					//设置频道
+					TxtChannel.text = ChatTab.getTabAt(0).label;
+					//设置心跳信息字符串
+					this.formatPlayerPulseInfo();
+					//结果
+					result = 1;
+				} else {
+					this.error = 1;
+					this.flashLog("error", "initMemberInfo failure");
+				}
+				
+				return result;
+			}
+			
+			/**
+			 * 连接服务器
+			 */ 
+			private function connectServer(ip:String, port:int):int {
+				var result:int = 0;
+				
+				if (0 == this.error) {
+					try {						
+						this.socketHandle.connect(ip, port);
+						result = 1;
+					} catch(error:Error) {
+						this.socketHandle.close();
+						this.flashLog("error", "connect failure");
+					}
+				}
+				
+				return result;
+			}
+			
+			/**
+			 * 心跳信息
+			 * 
+			 */ 
+			private function formatPlayerPulseInfo():void {
+				var message:ChatMessage = new ChatMessage();
+                    message.chatChannel = 0;
+                    message.fromId = this.player.fromId;
+                    message.toId = "0";
+                    message.groupId = this.player.groupId;
+                    message.name = this.player.name;
+                    message.message = "";
+                    
+                    message.writeTo(this.playerPulseInfo);
+			}
+						
+			/**
+			 * 初始信息
+			 */ 
+			private function initInfo():void{
+				this.flashLog("info", "send init info");	
+				var message:ChatMessage = new ChatMessage();
+					message.chatChannel = 100;
+					message.fromId = this.player.fromId;
+					message.toId = "0";
+					message.groupId = this.player.groupId;
+					message.name = this.player.name;
+					message.message = "";
+
+				var byte:ByteArray = new ByteArray();
+					message.writeTo(byte);
+					
+					this.socketHandle.writeInt(byte.length);
+					this.socketHandle.writeBytes(byte);
+					this.socketHandle.flush();
+			}
+			
+			/**
+			 * 心跳
+			 */ 
+			private function clientPulse():void{
+				if(1 == this.connected) {					
+					this.flashLog("info", "pulse");	
+					//发送						
+                    this.socketHandle.writeInt(this.playerPulseInfo.length);
+                    this.socketHandle.writeBytes(this.playerPulseInfo);
+                    this.socketHandle.flush();
+                    //间隔
+					setTimeout(this.clientPulse, this.pulseInterval * 1000);
+				}
+				else {
+					this.flashLog("warn", "pulse stop");
+				}
+			}
+			
+			/**
+			 * 关闭
+			 */ 
+			private function socketCloseHandle(event:Event):void {
+				this.connected = 0;
+				this.flashLog("error", "connect closed");
+			}
+			
+			/**
+			 * 连接成功发送初始用户信息
+			 */ 
+			private function socketConnetHandle(event:Event):void {
+				//间隔心跳
+				this.flashLog("info", "connect");
+				this.connected = 1;
+				this.initInfo();
+				this.clientPulse();
+			}
+			
+			/**
+			 * IO错误
+			 */ 
+			private function socketIoErrorHandle(event:IOErrorEvent):void {
+				this.connected = 0;
+				this.flashLog("warn", "io error");
+			}
+			
+			/**
+			 * Security错误
+			 */ 
+			private function socketSecurityErrorHandle(event:SecurityErrorEvent):void {
+				this.connected = 0;
+				this.flashLog("warn", "security error");
+			}
+			
+			/**
+			 * 接受服务器消息
+			 * 
+			 */ 
+			private function socketDataHandle(event:ProgressEvent):void {			    
+			    this.parsePackData(1,0);					
+			}
+			
+			/**
+			 * 解包 
+			 */ 
+			private function parsePackData(head:int,pack_len:int):void {
+                if (head) {
+					if(this.socketHandle.bytesAvailable >= 4) {                        
+						pack_len = this.socketHandle.readInt();
+						if (pack_len == 0){
+							return;
+						}
+						this.parsePackData(0,pack_len);						
+					}					                   
+                } else {
+					if(this.socketHandle.bytesAvailable >= pack_len) {                        
+						var bytes:ByteArray = new ByteArray();
+						this.socketHandle.readBytes(bytes, 0, pack_len);						
+						//消息处理
+						this.doReceivedMessage(bytes);	
+						if(this.socketHandle.bytesAvailable >= 4) {
+							this.parsePackData(1,0);
+						}
+					} 
+				}              
+			}
+			
+			/**
+             * 消息显示
+             */			
+			private function doReceivedMessage(response:ByteArray):void {	
+				var message:ChatMessage = new ChatMessage();	
+				response.position = 0;
+				message.mergeFrom(response);
+							
+				var chatChannel:int = message.chatChannel;
+				var chatName:String = this.player.fromId == message.fromId ? ((chatChannel != 3) ? "你说" : "你对\""+ message.name +"\"说") : message.name;
+				var chatMessage:String = message.message;
+				
+				switch (chatChannel) {							
+					case 1:
+                    case 1000:
+						//公共
+						if (1 != this.currentChannel) {
+							publicNavChannel.icon = this.noticeIcon;
+						}
+						publicConChannel.appendText("[" + chatName + "]" + chatMessage + "\n");
+						break;
+					case 2:
+                    case 2000:
+						//群组
+						if (2 != this.currentChannel) {
+							groupNavChannel.icon = this.noticeIcon;
+						}
+						groupConChannel.appendText("[" + chatName + "]" + chatMessage + "\n");
+						break;
+					case 3:
+                    case 3000:
+						//私聊
+						if (3 != this.currentChannel) {
+							personalNavChannel.icon = this.noticeIcon;
+						}
+						personalConChannel.appendText("[" + chatName + "]" + chatMessage + "\n");
+						break;
+					case 200:
+						//系统公告
+						if (1 != this.currentChannel) {
+							publicNavChannel.icon = this.noticeIcon;
+						}
+						publicConChannel.appendText("[系统公告]" + chatMessage + "\n");
+						break;
+					default:
+						this.flashLog("warn", "error channel");			
+				}
+				message = null;
+			}
+			
+			
+			/**
+			 * 手动发送消息
+			 */
+			protected function sendMessage(event:Event):void {
+				var err:String = "";
+				var message:String = TxtMessage.text;
+				if (1 == this.connected) {					
+					if ("" != message) {
+                        
+                        var byte:ByteArray = new ByteArray();
+					    switch (this.currentChannel) {							
+                            case 1:
+                                //公共                                
+								sendChatMessage.chatChannel = int(this.currentChannel);
+								sendChatMessage.fromId = this.player.fromId;
+								sendChatMessage.toId = "0";
+								sendChatMessage.groupId = this.player.groupId;
+								sendChatMessage.name = this.player.name;
+								sendChatMessage.message = message;
+								sendChatMessage.writeTo(byte);
+                                
+                                this.socketHandle.writeInt(byte.length);
+                                this.socketHandle.writeBytes(byte);
+                                this.socketHandle.flush();
+                                break;
+                            case 2:
+                                //群组
+                                if (this.player.groupId) {
+									sendChatMessage.chatChannel = int(this.currentChannel);
+									sendChatMessage.fromId = this.player.fromId;
+									sendChatMessage.toId = "0";
+									sendChatMessage.groupId = this.player.groupId;
+									sendChatMessage.name = this.player.name;
+									sendChatMessage.message = message;
+									sendChatMessage.writeTo(byte);
+                                    
+                                    this.socketHandle.writeInt(byte.length);
+                                    this.socketHandle.writeBytes(byte);
+                                    this.socketHandle.flush();
+                                } else {
+                                    err = "无群组，发送失败";
+                                }
+                                break;
+                            case 3:
+                                //私聊
+                                if (TxtChannel.text) {
+									sendChatMessage.chatChannel = int(this.currentChannel);
+									sendChatMessage.fromId = this.player.fromId;
+									sendChatMessage.toId = TxtChannel.text;
+									sendChatMessage.groupId = this.player.groupId;
+									sendChatMessage.name = this.player.name;
+									sendChatMessage.message = message;
+									sendChatMessage.writeTo(byte);
+                                    
+                                    this.socketHandle.writeInt(byte.length);
+                                    this.socketHandle.writeBytes(byte);
+                                    this.socketHandle.flush();				    
+                                } else {
+                                    err = "私聊对象不能为空";
+                                }
+                                break;			
+                        }					    
+					} else {
+						err = "发送消息不能为空";
+					}
+				}
+				else {
+					err = "连接已经终止";
+				}
+
+				if (err) {
+					//频道
+					switch (this.currentChannel) {						
+						case 1:
+							//公共
+							publicConChannel.appendText(err + "\n");
+							break;
+						case 2:
+							//群组
+							groupConChannel.appendText(err + "\n");
+							break;
+						case 3:
+							//私聊
+							personalConChannel.appendText(err + "\n");
+							break;			
+					}
+				}
+				//清理消息
+				TxtMessage.text = "";
+			}
+			
+			/**
+			 * 频道切换
+			 */ 
+			protected function channelChange(event:IndexChangedEvent):void {
+				//记录改变
+				this.currentChannel = ChatTab.selectedIndex + 1;
+				this.flashLog("info", "change channel " + this.currentChannel);
+				//恢复默认
+				switch (this.currentChannel) {					
+					case 1:
+						//公共
+						publicNavChannel.icon = this.publicIcon;
+						break;
+					case 2:
+						//群组
+						groupNavChannel.icon = this.groupIcon;
+						break;
+					case 3:
+						//私聊
+						personalNavChannel.icon = this.personalIcon;
+						break;			
+				}
+								
+				//文本框改变
+				if (this.currentChannel != 3) {
+					TxtChannel.text = ChatTab.getTabAt(ChatTab.selectedIndex).label						
+					TxtChannel.editable = false;
+				}
+				else {
+					TxtChannel.text = "";
+					TxtChannel.editable = true;
+				}
+			}
+		]]>
+	</fx:Script>
+	
+	<fx:Declarations>
+		<!-- 将非可视元素（例如服务、值对象）放在此处 -->
+	</fx:Declarations>
+	
+	<mx:TabNavigator id="ChatTab" x="0" y="0" width="450" height="180" tabWidth="70" paddingTop="0" creationPolicy="all">
+		<s:NavigatorContent id="publicNavChannel" label="公共" icon="{publicIcon}" width="100%" height="100%">
+			<s:TextArea id="publicConChannel" editable="false" borderVisible="false" width="100%" height="100%"/>
+		</s:NavigatorContent>
+		<s:NavigatorContent id="groupNavChannel" label="群组" icon="{groupIcon}" width="100%" height="100%">
+			<s:TextArea id="groupConChannel" editable="false" width="100%" height="100%" borderVisible="false"/> 
+		</s:NavigatorContent>
+		<s:NavigatorContent id="personalNavChannel" label="私聊" icon="{personalIcon}" width="100%" height="100%">
+			<s:TextArea id="personalConChannel" editable="false" width="100%" height="100%" borderVisible="false"/> 
+		</s:NavigatorContent>		
+	</mx:TabNavigator>
+	
+	<s:TextInput x="0" y="181" width="72" id="TxtChannel" editable="false" textAlign="center"/>
+	<s:TextInput x="74" y="181" width="310" id="TxtMessage"/>	
+	<s:Button x="385" y="181" label="发送" width="64" id="BtnMessage"/>
+</s:Application>

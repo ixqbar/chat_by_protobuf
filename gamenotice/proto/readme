@@ -1,0 +1,2 @@
+1)php init.php
+2)cp pb_proto_.php ../lib/ChatMessage.class.php

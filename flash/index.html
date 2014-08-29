@@ -1,0 +1,102 @@
+<html>
+  <head>
+    <title></title>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <script src="util.js"></script>
+    <script>
+        var GameChat = {
+            init : function() {
+                this.loadFlash();
+            },
+            loadFlash : function () {
+                swfobject.embedSWF(
+                "gamechat.swf?" + Math.random(), 
+                "chat", 
+                450, 
+                205,
+                '10.0.0',
+                'expressinstall.swf', 
+                {},
+                {
+                    menu  : "false",            
+                    scale : "showall",
+                    wmode : "window",
+                    devicefont : "true",
+                    allowScriptAccess : "always",
+                    allowFullScreen : "true"
+                }, 
+                {  
+                    id:"chatApp",
+                    name:"chat"
+                });
+                $("#info").hide();
+                $("#chat").show();
+            },
+            log : function (log) {
+                if (typeof console != 'undefined') {
+                    console.log(log);
+                }
+            },
+            flashLog : function(type,log) {
+                switch (type) {
+                    case 'error':
+                        $("#info").show();
+                        $("#chat").html(log);
+                        break;
+                    default:
+                        this.log(type + ':' + log);
+                }
+            }
+        };        
+        $(function(){
+            $("#info").show();
+            $("#chat").hide();
+            
+            $("#connect").click(function(){
+                var member = {};
+
+                member.fromId = $('#memberId').val();
+                member.name = $('#nickname').val();
+                member.groupId = $('#groupId').val();
+
+                var error = 0;
+
+                if (member.fromId == '' || parseInt(member.fromId) <= 0) {
+                    alert("err fromId");
+                    error = 1;
+                }            
+
+                if (member.name == '') {
+                    alert('err name');
+                    error = 1;
+                }
+
+                if (member.groupId == '' || parseInt(member.groupId) < 0) {
+                    alert('err groupId');
+                    error = 1;
+                }
+
+                if (0 == error) {
+                    GameChat.init();
+                    setTimeout(function(){
+                        var flash = swfobject.getObjectById("chatApp");
+                        flash['initMemberInfo'](member);
+                        flash['connectServer']("10.10.43.45",8088);
+                    }, 3000);
+                }
+            });
+        });
+    </script>
+  </head>
+  <body>
+      <div id="chat"></div>
+      <div id="info">
+          <form>
+              memberId:<input id="memberId"/><br/>   
+              name:<input id="nickname"/><br/>
+              groupId:<input id="groupId" value="0"/>
+              <input type="button" id="connect" value="连接"/>
+          </form>
+      </div>     
+  </body>
+</html>
